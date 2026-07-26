@@ -201,6 +201,82 @@ describe("hosted posture (the calendar-prod shape): /mcp is not served at all", 
     expect(health.status).toBe("ok");
     expect(health.mode).toBe("self_hosted");
   });
+
+  test("OPTIONS /mcp is claimed by the guarded route, not the CORS handler", async () => {
+    // Documented quirk (pre-existing shape, now asserted): route 14 matches on
+    // PATH only, so a preflight goes through the auth posture and gets 404 here
+    // (401 under `enforce`) with no Access-Control-* headers. Only paths that are
+    // neither /v1* nor /mcp reach the route-15 CORS responder.
+    const base = startServer(hostedEnv);
+    const res = await fetch(`${base}/mcp`, { method: "OPTIONS" });
+    expect(res.status).toBe(404);
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
+    expect(await res.text()).not.toContain("create_org");
+
+    const other = await fetch(`${base}/anything-else`, { method: "OPTIONS" });
+    expect(other.status).toBe(200);
+    expect(other.headers.get("access-control-allow-origin")).toBe("*");
+  });
+});
+
+/**
+ * The value that actually ships to calendar-prod via Terraform is `cloud`, not
+ * `self_hosted`: `@hasna/contracts` CONTRACT.md Amendment A1 declares the runtime
+ * storage enum `local | cloud` and lists `self_hosted` as a deprecated alias, and
+ * every other Terraform-managed Hasna app already sets `cloud`. This fences the
+ * deployed shape specifically, so the production posture cannot regress behind a
+ * suite that only ever exercised `self_hosted`.
+ */
+describe("hosted posture via mode=cloud (the value deployed to calendar-prod)", () => {
+  const cloudEnv = {
+    HASNA_CALENDAR_STORAGE_MODE: "cloud",
+    HASNA_CALENDAR_DATABASE_URL: DUMMY_DSN,
+    HASNA_CALENDAR_API_SIGNING_KEY: DUMMY_SIGNING_SECRET,
+  };
+
+  test("anonymous POST /mcp is 404 LOCAL_PLANE_DISABLED and leaks no tool names", async () => {
+    const base = startServer(cloudEnv);
+    const { status, body } = await mcpPost(base);
+    expect(status).toBe(404);
+    expect(body).not.toContain("create_org");
+    expect(JSON.parse(body).code).toBe("LOCAL_PLANE_DISABLED");
+  });
+
+  test("anonymous tools/call create_org is refused", async () => {
+    const base = startServer(cloudEnv);
+    const res = await fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: MCP_HEADERS,
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "create_org", arguments: { name: "pwned" } },
+      }),
+    });
+    expect(res.status).toBe(404);
+    expect(JSON.parse(await res.text()).code).toBe("LOCAL_PLANE_DISABLED");
+  });
+
+  test("/v1 stays authenticated and the probes stay public", async () => {
+    const base = startServer(cloudEnv);
+    expect((await fetch(`${base}/v1/orgs`)).status).toBe(401);
+    await expectProbesPublic(base, { ready: false });
+  });
+
+  test("/health reports mode 'cloud' verbatim", async () => {
+    const base = startServer(cloudEnv);
+    const health = (await (await fetch(`${base}/health`)).json()) as { mode: string; status: string };
+    expect(health.status).toBe("ok");
+    expect(health.mode).toBe("cloud");
+  });
+
+  test("mode=cloud ALONE (no DSN) is enough to disable the local plane", async () => {
+    const base = startServer({ HASNA_CALENDAR_STORAGE_MODE: "cloud" });
+    const { status, body } = await mcpPost(base);
+    expect(status).toBe(404);
+    expect(JSON.parse(body).code).toBe("LOCAL_PLANE_DISABLED");
+  });
 });
 
 describe("enforce posture: /mcp requires the serve credential", () => {

@@ -59,9 +59,16 @@ export interface ServeOptions {
  * the ALB target group health-checks `/health` (matcher 200) and ECS cycles the
  * task if it stops answering.
  *
- * Known pre-existing quirk, unchanged here: an `OPTIONS /v1/...` preflight is
- * claimed by route 5-13 (path prefix match) and treated as a write, so it 401s
- * rather than returning CORS headers. Documented, not fixed in this hotfix.
+ * Known pre-existing quirks, unchanged here — both CORS-preflight-only:
+ *   - `OPTIONS /v1/...` is claimed by route 5-13 (path prefix match) and treated
+ *     as a write, so it 401s rather than returning CORS headers.
+ *   - `OPTIONS /mcp` is claimed by route 14 below (it matches on path, not
+ *     method) and so goes through the auth posture: 401 under `enforce`, 404
+ *     `LOCAL_PLANE_DISABLED` when the local plane is off. It never reaches the
+ *     route-15 CORS handler either.
+ * Net effect: only paths that are neither `/v1*` nor `/mcp` get a real CORS
+ * preflight. Both data surfaces are server-to-server today, so this is
+ * documented, not fixed in this hotfix.
  */
 export function serve(port: number, options: ServeOptions = {}) {
   const hostname = options.host || process.env["CALENDAR_HOST"] || process.env["HOST"] || "127.0.0.1";

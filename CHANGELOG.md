@@ -111,17 +111,27 @@ drift that caused this. The error names the replacement:
 `set HASNA_CALENDAR_STORAGE_MODE=self_hosted instead`. The same applies to the other
 retired spellings (`hosted`, `server`, `saas`, `prod`, `sqlite`, `offline`).
 
+`self_hosted` and `cloud` are both canonical here and behave **identically** on the
+server. **Prefer `cloud`**: `@hasna/contracts` `CONTRACT.md` Amendment A1 declares the
+runtime storage enum to be `local | cloud` and lists `self_hosted` as a deprecated
+alias, and every other Terraform-managed Hasna app already sets `cloud`. The error
+hint above still names `self_hosted` (also valid); it is the one place left that
+should eventually say `cloud`.
+
 `/health`, `/ready` and `/version` now report the canonical mode
 (`local`/`self_hosted`/`cloud`) instead of the invented `"remote"` label.
 
 ### Deploy requirements (BREAKING — these must land together)
 
-1. **`calendar-prod` task definition:** change
-   `HASNA_CALENDAR_STORAGE_MODE` from `remote` to **`self_hosted`**. A task
-   definition still carrying `remote` will **not start** on this version.
+1. **`calendar-prod`:** change `HASNA_CALENDAR_STORAGE_MODE` from `remote` to
+   **`cloud`**. A task definition still carrying `remote` will **not start** on this
+   version. `calendar-prod` is Terraform-managed
+   (`hasna-xyz-infra apps/calendar/prod/main.tf`, `module "app"` -> `env`), so the
+   change must be made **there**, not by hand-registering a task-definition revision:
+   a hand-registered revision is drift that the next `terraform apply` would revert
+   back to `remote`, which on this version is a delayed self-inflicted outage.
 2. The image already carries the corrected default (`Dockerfile` `ENV` changed
-   `remote` -> `self_hosted`), so a redeploy that drops the container override also
-   works.
+   `remote` -> `cloud`), so a redeploy that drops the container override also works.
 3. Nothing else changes: no new secret, no new IAM permission, no ALB/target-group
    change. `HASNA_CALENDAR_DATABASE_URL` and `HASNA_CALENDAR_API_SIGNING_KEY` keep
    coming from Secrets Manager under the same item names.

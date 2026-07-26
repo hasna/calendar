@@ -49,10 +49,32 @@ uses `MCP_HTTP_PORT` and defaults to `8803`.
 
 Any other value is a **hard startup failure**. It is never silently downgraded to
 `local`: doing so used to split a single process across two different datasets. In
-particular `remote` is **rejected**, not aliased — set `self_hosted` instead.
+particular `remote` is **rejected**, not aliased — set `cloud` instead.
 
-`self_hosted` and `cloud` additionally need `HASNA_CALENDAR_API_URL` (defaults to
-`https://calendar.hasna.xyz`) and `HASNA_CALENDAR_API_KEY`.
+`cloud` is the value the deployed `calendar-prod` service uses, matching every other
+Terraform-managed Hasna app and the `@hasna/contracts` `CONTRACT.md` Amendment A1
+runtime enum. `self_hosted` is still accepted by this package but is a **deprecated
+spelling** of the same hosted posture — prefer `cloud` for new configuration.
+
+**These two modes mean different things on the two sides of the wire — do not mix
+them up:**
+
+- **Client side** (`calendar` CLI, `calendar-mcp`, the SDK): `self_hosted`/`cloud`
+  route `getStore()` at a remote `/v1`, and therefore **do** additionally need
+  `HASNA_CALENDAR_API_URL` (defaults to `https://calendar.hasna.xyz`) and
+  `HASNA_CALENDAR_API_KEY`.
+- **Server side** (`calendar-serve`): `self_hosted`/`cloud` mean *"this process **is**
+  the hosted deployment"*. It talks to Postgres directly via
+  `HASNA_CALENDAR_DATABASE_URL` + `HASNA_CALENDAR_API_SIGNING_KEY`, and needs **neither**
+  `HASNA_CALENDAR_API_URL` **nor** `HASNA_CALENDAR_API_KEY`. `calendar-prod` runs with
+  neither and is correct. Setting the client-flip pair on a serve process points it at
+  *itself* — see the `SPLIT_STORE_PLANE` note under "Auth posture for `/mcp`".
+
+Known limitation (pre-existing, not changed here): `isCloudModeEnabled()` treats a
+**generic** `DATABASE_URL` as "hosted", so a developer who happens to have an
+unrelated `DATABASE_URL` exported will find `/mcp` disabled on a local
+`calendar-serve`. Workaround: unset `DATABASE_URL`, or set `CALENDAR_SERVE_API_KEY`.
+Narrowing that lookup to the app-scoped vars is tracked separately.
 
 ## SDK
 
@@ -318,7 +340,7 @@ In HTTP mode, MCP requests are served at `/mcp`.
 | 11 | `/v1/availability[/:id]` | GET POST DELETE | API key | Postgres | **data** |
 | 12 | `/v1/members` | GET POST DELETE | API key | Postgres | **data** |
 | 13 | `/v1/<unknown>` | any | API key | none | metadata (404) |
-| 14 | `/mcp` | POST GET DELETE | **auth posture** (below) | `getStore()`, 23 tools | **data** |
+| 14 | `/mcp` | POST GET DELETE (+ OPTIONS) | **auth posture** (below) | `getStore()`, 23 tools | **data** |
 | 15 | `OPTIONS` (non-`/v1`, non-`/mcp`) | OPTIONS | public | none | metadata (CORS) |
 | 16 | anything else | any | public | none | metadata (404) |
 
@@ -327,8 +349,16 @@ service-contract probes an ALB target group and a container healthcheck depend o
 `/v1` authenticates itself with the `@hasna/contracts` API-key verifier (reads need
 `calendar:read`, writes need `calendar:write`).
 
-Known quirk: an `OPTIONS /v1/...` preflight is claimed by the `/v1` handler and
-treated as a write, so it answers 401 rather than returning CORS headers.
+Known quirks — both pre-existing, both CORS-preflight-only, neither fixed here:
+
+- `OPTIONS /v1/...` is claimed by the `/v1` handler and treated as a write, so it
+  answers **401** rather than returning CORS headers.
+- `OPTIONS /mcp` is claimed by the `/mcp` route and goes through the auth posture, so
+  it answers **401** in `enforce` and **404 `LOCAL_PLANE_DISABLED`** when the local
+  plane is disabled — in neither case does it return CORS headers. Only routes 15/16
+  (everything that is neither `/v1*` nor `/mcp`) get a real CORS preflight response.
+  Consequence: a browser cannot call `/v1` or `/mcp` cross-origin. Both surfaces are
+  server-to-server today, so this is documented rather than changed.
 
 ### Auth posture for `/mcp`
 
@@ -365,8 +395,9 @@ calendar-serve --allow-anonymous
 # local with a shared credential
 CALENDAR_SERVE_API_KEY=<key> calendar-serve
 
-# hosted (ECS/RDS): /v1 only, /mcp not served
-HASNA_CALENDAR_STORAGE_MODE=self_hosted HASNA_CALENDAR_DATABASE_URL=<dsn> calendar-serve
+# hosted (ECS/RDS): /v1 only, /mcp not served.
+# No HASNA_CALENDAR_API_URL / HASNA_CALENDAR_API_KEY here — those are client-side.
+HASNA_CALENDAR_STORAGE_MODE=cloud HASNA_CALENDAR_DATABASE_URL=<dsn> calendar-serve
 ```
 
 ```sh
