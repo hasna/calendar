@@ -12,7 +12,7 @@ import {
   resolveServeCredential,
   type AuthPosture,
 } from "./auth-posture.js";
-import { isRemoteMode } from "../store/storage-mode.js";
+import { resolveClientTransport } from "../store/http-storage.js";
 
 export function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
@@ -75,6 +75,10 @@ export function serve(port: number, options: ServeOptions = {}) {
     host: hostname,
     allowAnonymous: options.allowAnonymous ?? isAnonymousOptInEnv(),
     hosted,
+    // What getStore() — and therefore every MCP tool — will actually talk to.
+    localPlaneTransport: resolveClientTransport("calendar").transport === "cloud-http"
+      ? "cloud-http"
+      : "local",
   });
 
   const server = Bun.serve({
@@ -95,7 +99,7 @@ export function serve(port: number, options: ServeOptions = {}) {
         return json({ name: "calendar", version: getPackageVersion(), mode });
       }
       if (path === "/ready" && req.method === "GET") {
-        if (!isRemoteMode(mode)) {
+        if (!hosted) {
           return json({ status: "ready", mode, checks: { database: "local" } });
         }
         try {

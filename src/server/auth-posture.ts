@@ -32,7 +32,12 @@
  * starting wide open.
  */
 
-import { isCloudModeEnabled } from "./cloud.js";
+// NOTE: this module deliberately has NO imports. `src/mcp/http.ts` uses its
+// primitives, and `src/mcp/index.ts` imports `./http.js`, so anything imported
+// here is pulled into the local-first CLI/MCP bundle. Importing `./cloud.js`
+// for a default `hosted` value dragged @hasna/contracts/auth, the Postgres
+// store and the cloud query client into `dist/mcp` — the caller passes `hosted`
+// explicitly instead.
 
 /** Env var carrying the shared credential for the local plane (`/mcp`). */
 export const SERVE_AUTH_ENV_VARS = ["CALENDAR_SERVE_API_KEY", "HASNA_CALENDAR_SERVE_API_KEY"] as const;
@@ -55,6 +60,25 @@ export interface AuthPosture {
   reason: string;
   /** The expected credential when `mode === "enforce"`. */
   credential: string | null;
+}
+
+/**
+ * Thrown when the local `/mcp` plane would be served against a DIFFERENT store
+ * than the hosted `/v1` plane in the same process.
+ *
+ * This is the defect-2 failure mode, gated behind a credential rather than
+ * anonymous: `/v1` always uses `getCloudStore()` (Postgres), while `/mcp` uses
+ * `getStore()`, which is the on-box SQLite `LocalStore` unless the client-flip
+ * env is set. A hosted process that enables `/mcp` without that env would hand
+ * authenticated callers a private SQLite island while reporting itself hosted.
+ */
+export class SplitStorePlaneError extends Error {
+  static readonly code = "SPLIT_STORE_PLANE";
+  readonly code = SplitStorePlaneError.code;
+  constructor(message: string) {
+    super(message);
+    this.name = "SplitStorePlaneError";
+  }
 }
 
 export class AuthNotConfiguredError extends Error {
@@ -122,10 +146,15 @@ export interface AuthPostureInput {
   allowAnonymous: boolean;
   /**
    * Whether this process serves the hosted, self-authenticating `/v1` plane
-   * (a remote DSN or a `self_hosted`/`cloud` storage mode). Defaults to the
-   * live env.
+   * (a remote DSN or a `self_hosted`/`cloud` storage mode). Required: resolved
+   * by the caller via `isCloudModeEnabled()` so this module stays import-free.
    */
-  hosted?: boolean;
+  hosted: boolean;
+  /**
+   * What `getStore()` — the store behind every MCP tool — resolves to. Passed
+   * in (rather than resolved here) to keep this module import-free.
+   */
+  localPlaneTransport: "local" | "cloud-http";
 }
 
 /** Actionable, credential-free startup error text. */
@@ -154,11 +183,28 @@ export function authNotConfiguredMessage(host: string | undefined): string {
  * only remaining option would be to serve data anonymously off-box.
  */
 export function resolveAuthPosture(input: AuthPostureInput): AuthPosture {
-  const hosted = input.hosted ?? isCloudModeEnabled();
+  const hosted = input.hosted;
   const credential = input.credential && input.credential.trim() !== "" ? input.credential.trim() : null;
 
   // A configured credential always wins over the anonymous opt-in.
   if (credential) {
+    if (hosted && input.localPlaneTransport === "local") {
+      throw new SplitStorePlaneError(
+        [
+          `calendar-serve: refusing to start — this is a HOSTED deployment (/v1 reads and writes`,
+          `the shared Postgres), but ${SERVE_AUTH_ENV_VARS[0]} would also enable /mcp, whose 23 tools`,
+          `go through getStore(). getStore() currently resolves to the on-box SQLite store, so the`,
+          `two planes of this one process would be on two DIFFERENT datasets — the exact split this`,
+          `release exists to remove.`,
+          ``,
+          `Fix ONE of the following, then restart:`,
+          `  1. Do not serve the local plane here: unset ${SERVE_AUTH_ENV_VARS[0]}.`,
+          `     /v1 keeps working and /mcp is simply not served (posture local-plane-disabled).`,
+          `  2. Put /mcp on the SAME store: set HASNA_CALENDAR_API_URL and HASNA_CALENDAR_API_KEY so`,
+          `     getStore() routes through the /v1 API instead of on-box SQLite.`,
+        ].join("\n"),
+      );
+    }
     return {
       mode: "enforce",
       reason: `credential from ${SERVE_AUTH_ENV_VARS[0]}/--api-key`,

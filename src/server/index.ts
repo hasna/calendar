@@ -16,7 +16,7 @@
  */
 import { getPackageVersion } from "./version.js";
 import { UnknownStorageModeError, resolveConfiguredStorageMode } from "../store/storage-mode.js";
-import { AuthNotConfiguredError } from "./auth-posture.js";
+import { AuthNotConfiguredError, SplitStorePlaneError } from "./auth-posture.js";
 
 const DEFAULT_PORT = 19428;
 
@@ -92,7 +92,11 @@ async function main() {
 }
 
 main().catch((e) => {
-  if (e instanceof UnknownStorageModeError || e instanceof AuthNotConfiguredError) {
+  if (
+    e instanceof UnknownStorageModeError
+    || e instanceof AuthNotConfiguredError
+    || e instanceof SplitStorePlaneError
+  ) {
     // Already an actionable, credential-free multi-line message.
     console.error(e.message);
     process.exit(1);

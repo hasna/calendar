@@ -347,6 +347,10 @@ resolved **once at startup, before the socket is bound**:
 active a request is only served anonymously if its **raw transport peer** is loopback
 (`x-forwarded-for` is deliberately ignored, so a proxy header cannot forge it).
 
+On a **hosted** deployment, setting `CALENDAR_SERVE_API_KEY` without also setting
+`HASNA_CALENDAR_API_URL` + `HASNA_CALENDAR_API_KEY` is refused at startup
+(`SPLIT_STORE_PLANE`): `/v1` would be on Postgres while `/mcp` was on on-box SQLite.
+
 `CALENDAR_SERVE_API_KEY` is intentionally a different variable from the client-flip
 `CALENDAR_API_KEY` / `HASNA_CALENDAR_API_KEY`: those point the CLI/MCP *at* a remote
 `/v1`, and reusing them here would flip `getStore()` to the API store as a side effect

@@ -10,6 +10,7 @@ import {
   presentedCredential,
   resolveAuthPosture,
   resolveServeCredential,
+  SplitStorePlaneError,
   timingSafeEqual,
   type AuthPosture,
 } from "./auth-posture.js";
@@ -22,6 +23,7 @@ function posture(overrides: Partial<Parameters<typeof resolveAuthPosture>[0]> = 
     host: "127.0.0.1",
     allowAnonymous: false,
     hosted: false,
+    localPlaneTransport: "cloud-http",
     ...overrides,
   });
 }
@@ -91,6 +93,36 @@ describe("auth posture matrix", () => {
         }
       }
     }
+  });
+});
+
+describe("split-store guard (defect-2 class, behind a credential)", () => {
+  test("hosted + serve credential + on-box SQLite local plane REFUSES to start", () => {
+    let thrown: unknown;
+    try {
+      posture({ credential: CREDENTIAL, hosted: true, localPlaneTransport: "local" });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(SplitStorePlaneError);
+    const message = (thrown as Error).message;
+    expect(message).toContain("two DIFFERENT datasets");
+    expect(message).toContain("HASNA_CALENDAR_API_URL");
+    expect(message).not.toContain(CREDENTIAL);
+  });
+
+  test("hosted + serve credential is fine when the local plane routes through /v1", () => {
+    expect(posture({ credential: CREDENTIAL, hosted: true, localPlaneTransport: "cloud-http" }).mode)
+      .toBe("enforce");
+  });
+
+  test("a NON-hosted server with a local store is unaffected", () => {
+    expect(posture({ credential: CREDENTIAL, hosted: false, localPlaneTransport: "local" }).mode)
+      .toBe("enforce");
+  });
+
+  test("hosted with NO credential is still local-plane-disabled, not an error", () => {
+    expect(posture({ hosted: true, localPlaneTransport: "local" }).mode).toBe("local-plane-disabled");
   });
 });
 

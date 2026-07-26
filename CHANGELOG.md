@@ -66,6 +66,20 @@ startup, before the socket is bound** (the `local-plane-disabled` posture follow
   too: it binds loopback only, now rejects any non-loopback transport peer, and
   requires `CALENDAR_SERVE_API_KEY` when one is set.
 
+**Also closed, same class, behind a credential.** A hosted process that *did* set
+`CALENDAR_SERVE_API_KEY` would serve `/mcp` through `getStore()` — on-box SQLite
+unless the client-flip env is set — while `/v1` used Postgres: defect 2 again,
+authenticated instead of anonymous. `resolveAuthPosture` now throws
+`SplitStorePlaneError` (`code: SPLIT_STORE_PLANE`) for that combination and names
+both fixes (drop the serve key, or set `HASNA_CALENDAR_API_URL` +
+`HASNA_CALENDAR_API_KEY` so both planes share one store). This cannot affect
+`calendar-prod`, which has no serve key.
+
+`/ready` now decides whether to round-trip the database from whether the hosted
+plane is configured (`isCloudModeEnabled()`), not from the reported mode label, so a
+contradictory `STORAGE_MODE=local` + DSN combination cannot turn `/ready` into an
+unconditional "ready".
+
 The full route census — every route the server mounts, its methods, its guard, the
 store it reaches and whether it carries data or only metadata — is in the README
 and in the header comment of `src/server/serve.ts`.
@@ -127,7 +141,10 @@ retired spellings (`hosted`, `server`, `saas`, `prod`, `sqlite`, `offline`).
   exhaustive assertion that **no combination of inputs yields an anonymous plane on
   an off-box bind**, loopback-address parsing (`::ffff:127.0.0.1`, `127.0.0.53`,
   and negatives such as `127.0.0.1.evil.com`, `::ffff:10.0.0.1`, `1270.0.0.1`), and
-  that `x-forwarded-for` cannot forge a loopback peer.
+  that `x-forwarded-for` cannot forge a loopback peer, plus the `SplitStorePlaneError`
+  matrix (hosted + credential + local store refuses; hosted + credential +
+  cloud-http store is fine; non-hosted is unaffected; hosted with no credential is
+  still `local-plane-disabled`).
 - `src/store/storage-mode.test.ts` — `remote` and other non-canonical values are
   rejected by `parseStorageMode`, `resolveClientTransport`, `resolveStorageClient`
   and `isCloudModeEnabled`; canonical values still resolve exactly as before; the
@@ -140,7 +157,7 @@ not exist on main. The failures are the real ones — anonymous `/mcp` answers 2
 with `create_org` in every posture, `serve()` happily binds `0.0.0.0` with
 `--allow-anonymous`, `serve()` starts with nothing configured, and `serve()` starts
 with `STORAGE_MODE=remote`. On this branch the same three files are **76 pass / 0
-fail**, and the whole suite is **199 pass / 0 fail**.
+fail**, and the whole suite is **203 pass / 0 fail**.
 
 ### Test isolation (why the suite was 11-red before)
 
@@ -151,6 +168,14 @@ writing the **live deployment**. A `[test] preload`
 auth-posture env vars, so the CLI tests — which spawn subprocesses with
 `{ ...process.env }` — inherit a clean env too. Those 11 pre-existing failures are
 now green.
+
+### Bundle hygiene
+
+`src/mcp/index.ts` imports `./http.js`, so anything `src/mcp/http.ts` imports lands in
+the local-first CLI/MCP bundle. `src/server/auth-posture.ts` is therefore written with
+**zero imports** — its first draft imported `./cloud.js` for a default `hosted` value
+and pulled `@hasna/contracts/auth`, the Postgres store and the cloud query client into
+`dist/mcp`. `hosted` and `localPlaneTransport` are passed in by the caller instead.
 
 ### Other
 
