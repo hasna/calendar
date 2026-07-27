@@ -29,18 +29,29 @@ async function readJson<T>(req: Request): Promise<T | null> {
   }
 }
 
+/**
+ * Postgres foreign-key violation (SQLSTATE 23503).
+ *
+ * Bun's SQL driver does NOT put the SQLSTATE on `code` — it sets
+ * `code = "ERR_POSTGRES_SERVER_ERROR"` and carries the SQLSTATE on `errno`
+ * (verified against Bun 1.3.14 + PostgreSQL 16: a bad `calendars.org_id` throws
+ * `PostgresError { code: "ERR_POSTGRES_SERVER_ERROR", errno: "23503",
+ * constraint: "calendars_org_id_fkey" }`). We check `errno`, the `code` a plain
+ * `pg`-style driver would use, and the message text — the same defensive shape
+ * as `isUniqueViolation` in pg-store.ts, which matches on the message for
+ * exactly this reason.
+ */
+function isForeignKeyViolation(e: unknown): boolean {
+  const pg = e as { code?: unknown; errno?: unknown } | null | undefined;
+  if (pg?.errno === "23503" || pg?.code === "23503") return true;
+  return /violates foreign key constraint/i.test((e as Error)?.message ?? "");
+}
+
 function mapDomainError(e: unknown): Response {
   if (e instanceof NotFoundError) return error(404, e.message);
   if (e instanceof ConflictError) return error(409, e.message);
   if (e instanceof RangeError) return error(400, e.message);
-  if (
-    typeof e === "object"
-    && e !== null
-    && "code" in e
-    && (e as { code?: unknown }).code === "23503"
-  ) {
-    return error(400, "referenced resource does not exist");
-  }
+  if (isForeignKeyViolation(e)) return error(400, "referenced resource does not exist");
   throw e;
 }
 

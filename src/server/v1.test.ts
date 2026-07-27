@@ -22,14 +22,57 @@ const dependencies = {
 
 const { handleV1Request } = await import("./v1.js");
 
-function postgresForeignKeyViolation(constraint: string): Error & { code: string } {
+/**
+ * The error Bun's SQL driver ACTUALLY throws on SQLSTATE 23503 — captured from
+ * Bun 1.3.14 + PostgreSQL 16 driving CalendarPgStore against
+ * migrations/0001_calendar_schema.sql, and matching the stack pasted in
+ * hasna/calendar#13 field for field.
+ *
+ * The SQLSTATE lives on `errno`; `code` is Bun's own transport tag. A fixture
+ * that puts "23503" on `code` describes a driver we do not run and lets a
+ * mapping that never fires in production go green — which is exactly how the
+ * first cut of this fix shipped broken.
+ */
+function postgresForeignKeyViolation(
+  table: string,
+  column: string,
+  references: string,
+): Error {
+  const constraint = `${table}_${column}_fkey`;
   const error = new Error(
-    `insert or update violates foreign key constraint "${constraint}"`,
-  ) as Error & { code: string };
+    `insert or update on table "${table}" violates foreign key constraint "${constraint}"`,
+  ) as Error & Record<string, unknown>;
   error.name = "PostgresError";
-  error.code = "23503";
-  error.stack = `PostgresError: ${error.message}\n    at database-driver.ts:1:1`;
+  error.code = "ERR_POSTGRES_SERVER_ERROR";
+  error.errno = "23503";
+  error.detail = `Key (${column})=(missing) is not present in table "${references}".`;
+  error.severity = "ERROR";
+  error.schema = "public";
+  error.table = table;
+  error.constraint = constraint;
+  error.routine = "ri_ReportViolation";
+  error.sourceURL = "internal:sql/postgres";
+  error.stack = `PostgresError: ${error.message}\n    at wrapPostgresError (internal:sql/postgres:171:27)`;
   return error;
+}
+
+/**
+ * Every driver-internal fragment the response body must not carry. Derived FROM
+ * the thrown error so it cannot drift away from the fixture: the message, the
+ * SQLSTATE, the constraint name, the row detail and the internal source URL.
+ */
+function leakedFragments(e: Error): string[] {
+  const pg = e as Error & Record<string, unknown>;
+  return [
+    e.name,
+    e.message,
+    String(pg.errno),
+    String(pg.code),
+    String(pg.constraint),
+    String(pg.detail),
+    String(pg.sourceURL),
+    String(e.stack),
+  ];
 }
 
 async function post(path: string, body: Record<string, unknown>): Promise<Response> {
@@ -70,8 +113,9 @@ describe("/v1 foreign key validation", () => {
   });
 
   test("a remaining calendar FK violation returns 400 without leaking Postgres details", async () => {
+    const thrown = postgresForeignKeyViolation("calendars", "org_id", "orgs");
     createCalendar.mockImplementationOnce(async () => {
-      throw postgresForeignKeyViolation("calendars_org_id_fkey");
+      throw thrown;
     });
 
     const response = await post("/v1/calendars", { org_id: "missing-org", name: "Bad reference" });
@@ -79,14 +123,24 @@ describe("/v1 foreign key validation", () => {
 
     expect(response.status).toBe(400);
     expect(JSON.parse(text)).toEqual({ error: "referenced resource does not exist" });
-    expect(text).not.toContain("PostgresError");
-    expect(text).not.toContain("23503");
-    expect(text).not.toContain("calendars_org_id_fkey");
+    for (const secret of leakedFragments(thrown)) expect(text).not.toContain(secret);
+  });
+
+  test("the issue #13 payload (org_id: \"undefined\") returns 400, not a 500", async () => {
+    createCalendar.mockImplementationOnce(async () => {
+      throw postgresForeignKeyViolation("calendars", "org_id", "orgs");
+    });
+
+    const response = await post("/v1/calendars", { org_id: "undefined", name: "No org" });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "referenced resource does not exist" });
   });
 
   test("a remaining attendee FK violation returns 400 without leaking Postgres details", async () => {
+    const thrown = postgresForeignKeyViolation("event_attendees", "event_id", "events");
     createAttendee.mockImplementationOnce(async () => {
-      throw postgresForeignKeyViolation("event_attendees_event_id_fkey");
+      throw thrown;
     });
 
     const response = await post("/v1/attendees", {
@@ -97,9 +151,7 @@ describe("/v1 foreign key validation", () => {
 
     expect(response.status).toBe(400);
     expect(JSON.parse(text)).toEqual({ error: "referenced resource does not exist" });
-    expect(text).not.toContain("PostgresError");
-    expect(text).not.toContain("23503");
-    expect(text).not.toContain("event_attendees_event_id_fkey");
+    for (const secret of leakedFragments(thrown)) expect(text).not.toContain(secret);
   });
 
   test("valid calendar input still returns the created record", async () => {
