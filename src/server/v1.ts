@@ -11,6 +11,7 @@ import { ConflictError, NotFoundError } from "../types/index.js";
 import { getCloudStore, getCloudVerifier } from "./cloud.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
+const DEFAULT_DEPENDENCIES = { getCloudStore, getCloudVerifier };
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
@@ -32,6 +33,14 @@ function mapDomainError(e: unknown): Response {
   if (e instanceof NotFoundError) return error(404, e.message);
   if (e instanceof ConflictError) return error(409, e.message);
   if (e instanceof RangeError) return error(400, e.message);
+  if (
+    typeof e === "object"
+    && e !== null
+    && "code" in e
+    && (e as { code?: unknown }).code === "23503"
+  ) {
+    return error(400, "referenced resource does not exist");
+  }
   throw e;
 }
 
@@ -39,7 +48,11 @@ function mapDomainError(e: unknown): Response {
  * Handle a `/v1/*` request. Returns `null` when the path is not a `/v1` route so
  * the caller can fall through to other handlers.
  */
-export async function handleV1Request(req: Request, url: URL): Promise<Response | null> {
+export async function handleV1Request(
+  req: Request,
+  url: URL,
+  dependencies: typeof DEFAULT_DEPENDENCIES = DEFAULT_DEPENDENCIES,
+): Promise<Response | null> {
   const path = url.pathname;
   if (path !== "/v1" && !path.startsWith("/v1/")) return null;
 
@@ -50,7 +63,7 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
   // ── Auth (contracts API-key verifier) ──
   let verifier;
   try {
-    verifier = getCloudVerifier();
+    verifier = dependencies.getCloudVerifier();
   } catch (e) {
     return error(503, (e as Error).message);
   }
@@ -62,7 +75,7 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
   // Schema is applied out-of-band by the migration task/runner (owner role);
   // the serve process runs as the least-privilege app role (DML only) and never
   // issues DDL on the request path.
-  const store = getCloudStore();
+  const store = dependencies.getCloudStore();
 
   if (path === "/v1") return json({ service: "calendar", version: "v1" });
 

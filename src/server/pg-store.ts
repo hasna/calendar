@@ -267,6 +267,9 @@ export class CalendarPgStore {
 
   // ── Calendars ──
   async createCalendar(input: CreateCalendarInput): Promise<Calendar> {
+    if (typeof input.org_id !== "string" || !input.org_id.trim()) {
+      throw new RangeError("org_id is required");
+    }
     const id = newId();
     const slug = input.slug || slugify(input.name);
     try {
@@ -404,6 +407,9 @@ export class CalendarPgStore {
 
   // ── Attendees ──
   async createAttendee(input: CreateAttendeeInput): Promise<EventAttendee> {
+    if (typeof input.event_id !== "string" || !input.event_id.trim()) {
+      throw new RangeError("event_id is required");
+    }
     const id = newId();
     await this.client.query(
       `INSERT INTO event_attendees (id, event_id, agent_id, display_name, email, status, required)
