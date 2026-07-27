@@ -90,6 +90,21 @@ describe.skipIf(!DSN)("/v1 foreign keys against a real Postgres", () => {
     expect(await response.json()).toEqual({ error: "referenced resource does not exist" });
   });
 
+  test("a non-string calendar name returns 400, not an uncaught TypeError", async () => {
+    const orgResponse = await post("/v1/orgs", { name: `name-probe-${crypto.randomUUID().slice(0, 8)}` });
+    expect(orgResponse.status).toBe(201);
+    const { org } = (await orgResponse.json()) as { org: { id: string } };
+    createdOrgIds.push(org.id);
+
+    // A real org id, so the org_id guard passes and `name` is the only thing
+    // left to break: `slugify(42)` throws a TypeError that mapDomainError
+    // re-throws, which escapes Bun.serve's fetch as a 500.
+    const response = await post("/v1/calendars", { org_id: org.id, name: 42 });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "name is required" });
+  });
+
   test("a valid calendar write still returns 201", async () => {
     const orgResponse = await post("/v1/orgs", { name: `fk-probe-${crypto.randomUUID().slice(0, 8)}` });
     expect(orgResponse.status).toBe(201);
