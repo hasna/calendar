@@ -120,10 +120,14 @@ describe("server-side hosted detection uses the same vocabulary", () => {
     expect(isCloudModeEnabled({})).toBe(false);
   });
 
-  test("a DSN alone is hosted and reports the canonical self_hosted label", () => {
-    const env = { HASNA_CALENDAR_DATABASE_URL: "postgres://user@host:5432/db" };
-    expect(isCloudModeEnabled(env)).toBe(true);
-    expect(resolveServiceMode(env)).toBe("self_hosted");
+  test("only an app-scoped DSN enables hosted mode", () => {
+    const scopedEnv = { HASNA_CALENDAR_DATABASE_URL: "postgres://user@host:5432/db" };
+    expect(isCloudModeEnabled(scopedEnv)).toBe(true);
+    expect(resolveServiceMode(scopedEnv)).toBe("self_hosted");
+
+    const unscopedEnv = { DATABASE_URL: "postgres://user@host:5432/other" };
+    expect(isCloudModeEnabled(unscopedEnv)).toBe(false);
+    expect(resolveServiceMode(unscopedEnv)).toBe("local");
     expect(resolveServiceMode({})).toBe("local");
   });
 
