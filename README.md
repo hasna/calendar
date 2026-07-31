@@ -73,7 +73,9 @@ them up:**
 Hosted-deployment detection only considers the app-scoped
 `HASNA_CALENDAR_DATABASE_URL` and `CALENDAR_DATABASE_URL` variables (or an explicit
 hosted storage mode). A generic `DATABASE_URL` from another project does not disable
-the local `/mcp` plane.
+the local `/mcp` plane or feed the runtime `/v1` plane unless hosted storage mode is
+explicit. `calendar-serve migrate` still accepts `DATABASE_URL` because migration is
+already an explicit database operation.
 
 ## SDK
 

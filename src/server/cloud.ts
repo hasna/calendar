@@ -22,9 +22,25 @@ function resolveHostedDatabaseUrl(env: NodeJS.ProcessEnv): string | undefined {
   return env.HASNA_CALENDAR_DATABASE_URL || env.CALENDAR_DATABASE_URL || undefined;
 }
 
-/** Resolve the remote DATABASE_URL from the supported env vars (priority order). */
-export function resolveCloudDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return resolveHostedDatabaseUrl(env) || env.DATABASE_URL || undefined;
+function isExplicitHostedStorageMode(env: NodeJS.ProcessEnv): boolean {
+  const configured = resolveConfiguredStorageMode(CALENDAR_APP_SLUG, env as Record<string, string | undefined>);
+  return configured ? isRemoteMode(configured.mode) : false;
+}
+
+/**
+ * Resolve the remote database URL from the supported env vars (priority order).
+ *
+ * Runtime `/v1` accepts a generic DATABASE_URL only when hosted mode is explicit.
+ * `calendar-serve migrate` can opt into the generic fallback because that command
+ * is already an explicit database operation rather than a serve-mode signal.
+ */
+export function resolveCloudDatabaseUrl(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { includeGenericDatabaseUrl?: boolean } = {},
+): string | undefined {
+  return resolveHostedDatabaseUrl(env)
+    || (options.includeGenericDatabaseUrl || isExplicitHostedStorageMode(env) ? env.DATABASE_URL : undefined)
+    || undefined;
 }
 
 /** Resolve the HMAC signing secret used to verify API keys. */
@@ -50,8 +66,7 @@ export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): stri
  */
 export function isCloudModeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   if (resolveHostedDatabaseUrl(env)) return true;
-  const configured = resolveConfiguredStorageMode(CALENDAR_APP_SLUG, env as Record<string, string | undefined>);
-  return configured ? isRemoteMode(configured.mode) : false;
+  return isExplicitHostedStorageMode(env);
 }
 
 /**
@@ -77,7 +92,7 @@ function getClient(): CalendarCloudQueryClient {
   const url = resolveCloudDatabaseUrl();
   if (!url) {
     throw new Error(
-      "Cloud /v1 requires a remote database URL (HASNA_CALENDAR_DATABASE_URL / CALENDAR_DATABASE_URL / DATABASE_URL).",
+      "Cloud /v1 requires a remote database URL (HASNA_CALENDAR_DATABASE_URL / CALENDAR_DATABASE_URL / DATABASE_URL with explicit hosted storage mode).",
     );
   }
   const max = Number(process.env.HASNA_CALENDAR_DB_POOL_MAX) || 6;
