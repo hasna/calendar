@@ -28,7 +28,7 @@
       "readiness": {
         "method": "GET",
         "path": "/ready",
-        "public": true
+        "public": false
       },
       "version": {
         "method": "GET",
